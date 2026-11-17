@@ -58,9 +58,7 @@ static double ContrastRatio(double lum1, double lum2)
 static BalloonColors CalculateColors(COLORREF backColor)
 {
     double lumBack = RelativeLuminance(backColor);
-    double contrastWhite = ContrastRatio(1.0, lumBack);
-    double contrastBlack = ContrastRatio(0.0, lumBack);
-    bool useWhite = contrastWhite >= contrastBlack;
+    bool useWhite = ContrastRatio(1.0, lumBack) >= ContrastRatio(0.0, lumBack);
     BYTE br = GetRValue(backColor);
     BYTE bg = GetGValue(backColor);
     BYTE bb = GetBValue(backColor);
@@ -172,9 +170,7 @@ static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA, b
     }
     BalloonColors colors;
     if (automaticColors)
-    {
         colors = CalculateColors(backColor);
-    }
     else
     {
         colors.back = Color(255, 255, 255, 255);
@@ -183,28 +179,15 @@ static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA, b
     }
     SolidBrush background(colors.back);
     GraphicsPath balloonPath;
-    AddBalloonPath(balloonPath,
-        static_cast<REAL>(bodyX),
-        static_cast<REAL>(bodyY),
-        static_cast<REAL>(bodyW),
-        static_cast<REAL>(bodyH),
-        9.0f);
+    AddBalloonPath(balloonPath, static_cast<REAL>(bodyX), static_cast<REAL>(bodyY), static_cast<REAL>(bodyW), static_cast<REAL>(bodyH), 9.0f);
     gr.FillPath(&background, &balloonPath);
     Pen border(colors.border, 1.0f);
     gr.DrawPath(&border, &balloonPath);
     DrawIcon(gr, bodyX, bodyY);
     SolidBrush titleBrush(colors.fore);
     SolidBrush bodyBrush(automaticColors ? colors.fore : Color(255, 25, 75, 145));
-    RectF bodyRect(
-        static_cast<REAL>(bodyX + TEXT_X),
-        static_cast<REAL>(bodyY + 5),
-        static_cast<REAL>(bodyW - TEXT_X - RIGHT_MARGIN),
-        33.0f);
-    RectF titleRect(
-        static_cast<REAL>(bodyX + TEXT_X),
-        static_cast<REAL>(bodyY + 43),
-        static_cast<REAL>(bodyW - TEXT_X - RIGHT_MARGIN),
-        17.0f);
+    RectF bodyRect(static_cast<REAL>(bodyX + TEXT_X), static_cast<REAL>(bodyY + 5), static_cast<REAL>(bodyW - TEXT_X - RIGHT_MARGIN), 33.0f);
+    RectF titleRect(static_cast<REAL>(bodyX + TEXT_X), static_cast<REAL>(bodyY + 43), static_cast<REAL>(bodyW - TEXT_X - RIGHT_MARGIN), 17.0f);
     StringFormat fmt;
     fmt.SetTrimming(StringTrimmingEllipsisWord);
     fmt.SetFormatFlags(StringFormatFlagsLineLimit);
@@ -264,13 +247,7 @@ static bool EnsureWindow()
     wc.hInstance = inst;
     wc.lpszClassName = L"VFP_GDIPlus_Balloon_Test";
     if (!RegisterClassEx(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
-    g_hwnd = CreateWindowEx(
-        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-        wc.lpszClassName,
-        L"",
-        WS_POPUP,
-        0, 0, g_width, g_height,
-        nullptr, nullptr, inst, nullptr);
+    g_hwnd = CreateWindowEx(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, wc.lpszClassName, L"", WS_POPUP, 0, 0, g_width, g_height, nullptr, nullptr, inst, nullptr);
     return g_hwnd != nullptr;
 }
 static int ShowBalloon(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int timeoutMs, bool automaticColors, COLORREF backColor)
