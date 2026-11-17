@@ -4,3 +4,4 @@ EXPORTS
     BT_Hide=_BT_Hide@0
     BT_Destroy=_BT_Destroy@0
     BT_Version=_BT_Version@0
+    BT_ShowEx=_BT_ShowEx@28
