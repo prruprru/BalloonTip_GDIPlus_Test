@@ -22,6 +22,12 @@ static const int BODY_HEIGHT = 65;
 static const int ICON_SIZE = 20;
 static const int TEXT_X = 30;
 static const int RIGHT_MARGIN = 10;
+struct BalloonColors
+{
+    Color back;
+    Color fore;
+    Color border;
+};
 static std::wstring ToWide(LPCSTR value)
 {
     if (!value) return L"";
@@ -30,6 +36,44 @@ static std::wstring ToWide(LPCSTR value)
     std::wstring result(count, L'\0');
     MultiByteToWideChar(CP_ACP, 0, value, -1, &result[0], count);
     result.resize(count - 1);
+    return result;
+}
+static double Linearize(BYTE value)
+{
+    double c = value / 255.0;
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
+static double RelativeLuminance(COLORREF color)
+{
+    return 0.2126 * Linearize(GetRValue(color))
+         + 0.7152 * Linearize(GetGValue(color))
+         + 0.0722 * Linearize(GetBValue(color));
+}
+static double ContrastRatio(double lum1, double lum2)
+{
+    double lighter = std::max(lum1, lum2);
+    double darker = std::min(lum1, lum2);
+    return (lighter + 0.05) / (darker + 0.05);
+}
+static BalloonColors CalculateColors(COLORREF backColor)
+{
+    double lumBack = RelativeLuminance(backColor);
+    double contrastWhite = ContrastRatio(1.0, lumBack);
+    double contrastBlack = ContrastRatio(0.0, lumBack);
+    bool useWhite = contrastWhite >= contrastBlack;
+    BYTE br = GetRValue(backColor);
+    BYTE bg = GetGValue(backColor);
+    BYTE bb = GetBValue(backColor);
+    BYTE fr = useWhite ? 255 : 0;
+    BYTE fg = useWhite ? 255 : 0;
+    BYTE fb = useWhite ? 255 : 0;
+    BYTE borderR = static_cast<BYTE>(fr * 0.75 + br * 0.25);
+    BYTE borderG = static_cast<BYTE>(fg * 0.75 + bg * 0.25);
+    BYTE borderB = static_cast<BYTE>(fb * 0.75 + bb * 0.25);
+    BalloonColors result;
+    result.back = Color(255, br, bg, bb);
+    result.fore = Color(255, fr, fg, fb);
+    result.border = Color(255, borderR, borderG, borderB);
     return result;
 }
 static void AddRoundRect(GraphicsPath& path, REAL x, REAL y, REAL w, REAL h, REAL r)
@@ -90,7 +134,7 @@ static void DrawIcon(Graphics& gr, int bodyX, int bodyY)
     SolidBrush black(Color(255, 25, 25, 25));
     gr.DrawString(L"!", 1, &exclamation, PointF(iconX + 7.0f, iconY + 4.0f), &black);
 }
-static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA)
+static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA, bool automaticColors, COLORREF backColor)
 {
     std::wstring title = ToWide(titleA);
     std::wstring body = ToWide(textA);
@@ -126,7 +170,18 @@ static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA)
         SolidBrush shadowBrush(Color(alpha, 0, 0, 0));
         gr.FillPath(&shadowBrush, &shadowPath);
     }
-    SolidBrush white(Color(255, 255, 255, 255));
+    BalloonColors colors;
+    if (automaticColors)
+    {
+        colors = CalculateColors(backColor);
+    }
+    else
+    {
+        colors.back = Color(255, 255, 255, 255);
+        colors.fore = Color(255, 0, 0, 0);
+        colors.border = Color(255, 20, 20, 20);
+    }
+    SolidBrush background(colors.back);
     GraphicsPath balloonPath;
     AddBalloonPath(balloonPath,
         static_cast<REAL>(bodyX),
@@ -134,12 +189,12 @@ static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA)
         static_cast<REAL>(bodyW),
         static_cast<REAL>(bodyH),
         9.0f);
-    gr.FillPath(&white, &balloonPath);
-    Pen border(Color(255, 20, 20, 20), 1.0f);
+    gr.FillPath(&background, &balloonPath);
+    Pen border(colors.border, 1.0f);
     gr.DrawPath(&border, &balloonPath);
     DrawIcon(gr, bodyX, bodyY);
-    SolidBrush titleBrush(Color(255, 0, 0, 0));
-    SolidBrush bodyBrush(Color(255, 25, 75, 145));
+    SolidBrush titleBrush(colors.fore);
+    SolidBrush bodyBrush(automaticColors ? colors.fore : Color(255, 25, 75, 145));
     RectF bodyRect(
         static_cast<REAL>(bodyX + TEXT_X),
         static_cast<REAL>(bodyY + 5),
@@ -218,13 +273,13 @@ static bool EnsureWindow()
         nullptr, nullptr, inst, nullptr);
     return g_hwnd != nullptr;
 }
-extern "C" __declspec(dllexport) int WINAPI BT_Show(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int timeoutMs)
+static int ShowBalloon(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int timeoutMs, bool automaticColors, COLORREF backColor)
 {
     if (!EnsureWindow()) return 0;
     POINT pt = { x, y };
     if (owner && IsWindow(owner)) ClientToScreen(owner, &pt);
     HDC screen = GetDC(nullptr);
-    DrawBalloon(screen, pt.x, pt.y, title, text);
+    DrawBalloon(screen, pt.x, pt.y, title, text, automaticColors, backColor);
     ReleaseDC(nullptr, screen);
     SetWindowPos(g_hwnd, HWND_TOPMOST, pt.x, pt.y, g_width, g_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
@@ -235,6 +290,14 @@ extern "C" __declspec(dllexport) int WINAPI BT_Show(HWND owner, int x, int y, LP
     }
     if (timeoutMs > 0) g_timer = SetTimer(g_hwnd, 1, static_cast<UINT>(timeoutMs), nullptr);
     return 1;
+}
+extern "C" __declspec(dllexport) int WINAPI BT_Show(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int timeoutMs)
+{
+    return ShowBalloon(owner, x, y, title, text, timeoutMs, false, RGB(255, 255, 255));
+}
+extern "C" __declspec(dllexport) int WINAPI BT_ShowEx(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int timeoutMs, COLORREF backColor)
+{
+    return ShowBalloon(owner, x, y, title, text, timeoutMs, true, backColor);
 }
 extern "C" __declspec(dllexport) int WINAPI BT_Hide()
 {
@@ -263,5 +326,5 @@ extern "C" __declspec(dllexport) int WINAPI BT_Destroy()
 }
 extern "C" __declspec(dllexport) int WINAPI BT_Version()
 {
-    return 101;
+    return 102;
 }
