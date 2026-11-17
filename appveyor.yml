@@ -1,0 +1,9 @@
+image: Visual Studio 2022
+platform: Win32
+configuration: Release
+build:
+  project: BalloonTipTest.vcxproj
+  verbosity: minimal
+artifacts:
+  - path: bin\BalloonTipTest.dll
+    name: BalloonTipTest

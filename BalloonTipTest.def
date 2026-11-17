@@ -1,0 +1,6 @@
+LIBRARY "BalloonTipTest"
+EXPORTS
+    BT_Show=_BT_Show@24
+    BT_Hide=_BT_Hide@0
+    BT_Destroy=_BT_Destroy@0
+    BT_Version=_BT_Version@0
