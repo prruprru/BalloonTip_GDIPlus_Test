@@ -15,10 +15,12 @@ static ULONG_PTR g_gdiplusToken = 0;
 static HWND g_hwnd = nullptr;
 static UINT_PTR g_timer = 0;
 static ULONGLONG g_timeoutAt = 0;
+static bool g_inputArmed = false;
 static bool g_prevKeys[256] = {};
-static bool g_prevLeftDown = false;
+static bool g_prevMouse[5] = {};
 static const UINT_PTR TIMER_ID = 1;
 static const UINT TIMER_INTERVAL = 40;
+static const int MOUSE_KEYS[5] = { VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2 };
 static int g_width = 150;
 static int g_height = 105;
 static const int SHADOW = 14;
@@ -211,29 +213,58 @@ static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA, b
     DeleteDC(mem);
     DeleteObject(hBitmap);
 }
-static bool IsMouseVirtualKey(int key)
+static bool IsMouseKey(int key)
 {
-    return key == VK_LBUTTON || key == VK_RBUTTON ||
-           key == VK_MBUTTON || key == VK_XBUTTON1 ||
-           key == VK_XBUTTON2;
+    for (int i = 0; i < 5; ++i)
+        if (key == MOUSE_KEYS[i]) return true;
+    return false;
+}
+static bool AllInputReleased()
+{
+    for (int key = 1; key < 256; ++key)
+    {
+        if (GetAsyncKeyState(key) & 0x8000)
+            return false;
+    }
+    return true;
 }
 static void CaptureInputState()
 {
     for (int key = 1; key < 256; ++key)
         g_prevKeys[key] = (GetAsyncKeyState(key) & 0x8000) != 0;
-    g_prevLeftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    for (int i = 0; i < 5; ++i)
+        g_prevMouse[i] = (GetAsyncKeyState(MOUSE_KEYS[i]) & 0x8000) != 0;
 }
 static bool KeyWasPressed()
 {
     bool pressed = false;
     for (int key = 1; key < 256; ++key)
     {
-        if (IsMouseVirtualKey(key)) continue;
+        if (IsMouseKey(key)) continue;
         bool down = (GetAsyncKeyState(key) & 0x8000) != 0;
         if (down && !g_prevKeys[key]) pressed = true;
         g_prevKeys[key] = down;
     }
     return pressed;
+}
+static bool ClickedOutside(HWND hwnd)
+{
+    bool clickedOutside = false;
+    for (int i = 0; i < 5; ++i)
+    {
+        bool down = (GetAsyncKeyState(MOUSE_KEYS[i]) & 0x8000) != 0;
+        bool clicked = down && !g_prevMouse[i];
+        g_prevMouse[i] = down;
+        if (!clicked) continue;
+        POINT pt;
+        RECT rc;
+        if (GetCursorPos(&pt) && GetWindowRect(hwnd, &rc))
+        {
+            if (!PtInRect(&rc, pt))
+                clickedOutside = true;
+        }
+    }
+    return clickedOutside;
 }
 static void HideBalloonInternal(HWND hwnd)
 {
@@ -243,28 +274,29 @@ static void HideBalloonInternal(HWND hwnd)
         g_timer = 0;
     }
     g_timeoutAt = 0;
+    g_inputArmed = false;
     ShowWindow(hwnd, SW_HIDE);
-}
-static bool ClickedOutside(HWND hwnd)
-{
-    bool leftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-    bool clicked = leftDown && !g_prevLeftDown;
-    g_prevLeftDown = leftDown;
-    if (!clicked) return false;
-    POINT pt;
-    RECT rc;
-    if (!GetCursorPos(&pt) || !GetWindowRect(hwnd, &rc)) return false;
-    return !PtInRect(&rc, pt);
 }
 static LRESULT CALLBACK BalloonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_TIMER && wp == TIMER_ID)
     {
-        if ((g_timeoutAt && GetTickCount64() >= g_timeoutAt) ||
-            KeyWasPressed() || ClickedOutside(hwnd))
+        if (g_timeoutAt && GetTickCount64() >= g_timeoutAt)
         {
             HideBalloonInternal(hwnd);
+            return 0;
         }
+        if (!g_inputArmed)
+        {
+            if (AllInputReleased())
+            {
+                CaptureInputState();
+                g_inputArmed = true;
+            }
+            return 0;
+        }
+        if (KeyWasPressed() || ClickedOutside(hwnd))
+            HideBalloonInternal(hwnd);
         return 0;
     }
     if (msg == WM_NCHITTEST) return HTTRANSPARENT;
@@ -278,6 +310,7 @@ static LRESULT CALLBACK BalloonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_timer = 0;
         }
         g_timeoutAt = 0;
+        g_inputArmed = false;
         return 0;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
@@ -315,8 +348,9 @@ static int ShowBalloon(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int 
         KillTimer(g_hwnd, g_timer);
         g_timer = 0;
     }
-    CaptureInputState();
     g_timeoutAt = timeoutMs > 0 ? GetTickCount64() + static_cast<ULONGLONG>(timeoutMs) : 0;
+    g_inputArmed = false;
+    CaptureInputState();
     g_timer = SetTimer(g_hwnd, TIMER_ID, TIMER_INTERVAL, nullptr);
     if (!g_timer)
     {
