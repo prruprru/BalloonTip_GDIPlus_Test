@@ -14,6 +14,11 @@ using namespace Gdiplus;
 static ULONG_PTR g_gdiplusToken = 0;
 static HWND g_hwnd = nullptr;
 static UINT_PTR g_timer = 0;
+static ULONGLONG g_timeoutAt = 0;
+static bool g_prevKeys[256] = {};
+static bool g_prevLeftDown = false;
+static const UINT_PTR TIMER_ID = 1;
+static const UINT TIMER_INTERVAL = 40;
 static int g_width = 150;
 static int g_height = 105;
 static const int SHADOW = 14;
@@ -206,16 +211,60 @@ static void DrawBalloon(HDC screen, int x, int y, LPCSTR titleA, LPCSTR textA, b
     DeleteDC(mem);
     DeleteObject(hBitmap);
 }
+static bool IsMouseVirtualKey(int key)
+{
+    return key == VK_LBUTTON || key == VK_RBUTTON ||
+           key == VK_MBUTTON || key == VK_XBUTTON1 ||
+           key == VK_XBUTTON2;
+}
+static void CaptureInputState()
+{
+    for (int key = 1; key < 256; ++key)
+        g_prevKeys[key] = (GetAsyncKeyState(key) & 0x8000) != 0;
+    g_prevLeftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+}
+static bool KeyWasPressed()
+{
+    bool pressed = false;
+    for (int key = 1; key < 256; ++key)
+    {
+        if (IsMouseVirtualKey(key)) continue;
+        bool down = (GetAsyncKeyState(key) & 0x8000) != 0;
+        if (down && !g_prevKeys[key]) pressed = true;
+        g_prevKeys[key] = down;
+    }
+    return pressed;
+}
+static void HideBalloonInternal(HWND hwnd)
+{
+    if (g_timer)
+    {
+        KillTimer(hwnd, g_timer);
+        g_timer = 0;
+    }
+    g_timeoutAt = 0;
+    ShowWindow(hwnd, SW_HIDE);
+}
+static bool ClickedOutside(HWND hwnd)
+{
+    bool leftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    bool clicked = leftDown && !g_prevLeftDown;
+    g_prevLeftDown = leftDown;
+    if (!clicked) return false;
+    POINT pt;
+    RECT rc;
+    if (!GetCursorPos(&pt) || !GetWindowRect(hwnd, &rc)) return false;
+    return !PtInRect(&rc, pt);
+}
 static LRESULT CALLBACK BalloonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    if (msg == WM_TIMER)
+    if (msg == WM_TIMER && wp == TIMER_ID)
     {
-        if (g_timer)
+        if ((g_timeoutAt && GetTickCount64() >= g_timeoutAt) ||
+            KeyWasPressed() || ClickedOutside(hwnd))
         {
-            KillTimer(hwnd, g_timer);
-            g_timer = 0;
+            HideBalloonInternal(hwnd);
         }
-        ShowWindow(hwnd, SW_HIDE);
         return 0;
     }
     if (msg == WM_NCHITTEST) return HTTRANSPARENT;
@@ -228,6 +277,7 @@ static LRESULT CALLBACK BalloonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             KillTimer(hwnd, g_timer);
             g_timer = 0;
         }
+        g_timeoutAt = 0;
         return 0;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
@@ -265,7 +315,15 @@ static int ShowBalloon(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int 
         KillTimer(g_hwnd, g_timer);
         g_timer = 0;
     }
-    if (timeoutMs > 0) g_timer = SetTimer(g_hwnd, 1, static_cast<UINT>(timeoutMs), nullptr);
+    CaptureInputState();
+    g_timeoutAt = timeoutMs > 0 ? GetTickCount64() + static_cast<ULONGLONG>(timeoutMs) : 0;
+    g_timer = SetTimer(g_hwnd, TIMER_ID, TIMER_INTERVAL, nullptr);
+    if (!g_timer)
+    {
+        g_timeoutAt = 0;
+        ShowWindow(g_hwnd, SW_HIDE);
+        return 0;
+    }
     return 1;
 }
 extern "C" __declspec(dllexport) int WINAPI BT_Show(HWND owner, int x, int y, LPCSTR title, LPCSTR text, int timeoutMs)
@@ -278,12 +336,7 @@ extern "C" __declspec(dllexport) int WINAPI BT_ShowEx(HWND owner, int x, int y, 
 }
 extern "C" __declspec(dllexport) int WINAPI BT_Hide()
 {
-    if (g_timer && g_hwnd)
-    {
-        KillTimer(g_hwnd, g_timer);
-        g_timer = 0;
-    }
-    if (g_hwnd) ShowWindow(g_hwnd, SW_HIDE);
+    if (g_hwnd) HideBalloonInternal(g_hwnd);
     return 1;
 }
 extern "C" __declspec(dllexport) int WINAPI BT_Destroy()
